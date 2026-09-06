@@ -1,0 +1,727 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// IDENTITY & ACCESS
+// -----------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  firstName     String?
+  lastName      String?
+  isActive      Boolean   @default(true)
+  isVerified    Boolean   @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions           Session[]
+  memberships        OrganizationMembership[]
+  passwordResets     PasswordResetToken[]
+  verificationTokens VerificationToken[]
+  activityLogs       Activity[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  notificationPrefs  NotificationPreference[]
+  filesUploaded      File[]
+  imports            ImportJob[]
+  exports            ExportJob[]
+
+  // CRM
+  crmCompaniesOwned  CrmCompany[] @relation("CompanyOwner")
+  crmContactsOwned   CrmContact[] @relation("ContactOwner")
+  crmLeadsOwned      CrmLead[]    @relation("LeadOwner")
+  crmPipelinesOwned  CrmPipeline[] @relation("PipelineOwner")
+  crmDealsOwned      CrmDeal[]    @relation("DealOwner")
+
+  // HRMS Relations
+  hrmsEmployeeProfiles   HrmsEmployeeProfile[]
+  hrmsPerformanceReviews HrmsPerformanceReview[] @relation("ReviewerUser")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  deviceInfo   String?
+  ipAddress    String?
+  isRevoked    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// TENANCY & ORGANIZATION
+// -----------------------------------------------------------------------------
+
+model Organization {
+  id           String   @id @default(uuid())
+  name         String
+  slug         String   @unique
+  domain       String?  @unique
+  status       String   @default("active") // active, suspended, archived
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships       OrganizationMembership[]
+  teams             Team[]
+  departments       Department[]
+  invitations       Invitation[]
+  roles             Role[]
+  modules           OrganizationModule[]
+  subscriptions     Subscription[]
+  featureFlags      OrganizationFeatureFlag[]
+  settings          OrganizationSetting?
+  activityLogs      Activity[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  notificationPrefs NotificationPreference[]
+  folders           Folder[]
+  files             File[]
+  imports           ImportJob[]
+  exports           ExportJob[]
+
+  // CRM
+  crmCompanies      CrmCompany[]
+  crmContacts       CrmContact[]
+  crmLeads          CrmLead[]
+  crmPipelines      CrmPipeline[]
+  crmPipelineStages CrmPipelineStage[]
+  crmDeals          CrmDeal[]
+
+  // HRMS Relations
+  hrmsEmployeeProfiles   HrmsEmployeeProfile[]
+  hrmsAttendances        HrmsAttendance[]
+  hrmsLeaveRequests      HrmsLeaveRequest[]
+  hrmsPayrollStubs       HrmsPayrollStub[]
+  hrmsPerformanceReviews HrmsPerformanceReview[]
+}
+
+model OrganizationMembership {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  departmentId   String?
+  teamId         String?
+  status         String       @default("active") // active, disabled, removed
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  disabledAt     DateTime?
+  removedAt      DateTime?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department     Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  team           Team?        @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  roles          MembershipRole[]
+
+  @@unique([organizationId, userId])
+  @@index([organizationId, status])
+}
+
+model Team {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships    OrganizationMembership[]
+}
+
+model Department {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships    OrganizationMembership[]
+
+  // HRMS Relations
+  hrmsEmployeeProfiles HrmsEmployeeProfile[]
+}
+
+model Invitation {
+  id             String       @id @default(uuid())
+  organizationId String
+  email          String
+  roleId         String
+  departmentId   String?
+  teamId         String?
+  token          String       @unique
+  status         String       @default("pending") // pending, accepted, revoked, expired
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role           Role         @relation(fields: [roleId], references: [id])
+
+  @@index([organizationId, email, status])
+}
+
+// -----------------------------------------------------------------------------
+// RBAC
+// -----------------------------------------------------------------------------
+
+model Role {
+  id             String       @id @default(uuid())
+  organizationId String?      // null means platform-level role
+  name           String
+  description    String?
+  isSystem       Boolean      @default(false)
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions    RolePermission[]
+  memberships    MembershipRole[]
+  invitations    Invitation[]
+}
+
+model Permission {
+  id             String       @id @default(uuid())
+  action         String       // e.g., 'create:user', 'view:invoice'
+  resource       String       // e.g., 'user', 'invoice'
+  description    String?
+  moduleId       String?      // Which module this permission belongs to (null = platform)
+  isDelegatable  Boolean      @default(true) // If true, org admins can grant this to custom roles
+  createdAt      DateTime     @default(now())
+
+  roles          RolePermission[]
+}
+
+model RolePermission {
+  roleId         String
+  permissionId   String
+
+  role           Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission     Permission   @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model MembershipRole {
+  membershipId   String
+  roleId         String
+
+  membership     OrganizationMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  role           Role                   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([membershipId, roleId])
+}
+
+// -----------------------------------------------------------------------------
+// SUBSCRIPTIONS & MODULES
+// -----------------------------------------------------------------------------
+
+model SubscriptionPlan {
+  id             String       @id @default(uuid())
+  name           String
+  description    String?
+  price          Decimal      @default(0.0)
+  currency       String       @default("USD")
+  interval       String       @default("month") // month, year
+  trialDays      Int          @default(0)
+  isActive       Boolean      @default(true)
+  isDefault      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  subscriptions  Subscription[]
+  entitlements   PlanEntitlement[]
+}
+
+model PlanEntitlement {
+  id             String           @id @default(uuid())
+  planId         String
+  moduleId       String?          // Entitles access to a module
+  featureKey     String?          // Entitles access to a specific feature flag
+  limitKey       String?          // e.g., 'max_users'
+  limitValue     Int?             // e.g., 50
+  
+  plan           SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  module         Module?          @relation(fields: [moduleId], references: [id])
+}
+
+model Subscription {
+  id             String       @id @default(uuid())
+  organizationId String
+  planId         String
+  status         String       @default("active") // active, past_due, canceled, expired
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean  @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan           SubscriptionPlan @relation(fields: [planId], references: [id])
+}
+
+model Module {
+  id             String       @id @default(uuid())
+  name           String
+  version        String       @default("1.0.0")
+  description    String?
+  isGlobal       Boolean      @default(true) // Whether available to all by default or requires subscription
+  status         String       @default("active") // active, disabled, deprecated, archived
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organizationModules OrganizationModule[]
+  entitlements        PlanEntitlement[]
+}
+
+model OrganizationModule {
+  organizationId String
+  moduleId       String
+  isActive       Boolean      @default(true)
+  settings       Json?
+  activatedAt    DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  module         Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, moduleId])
+}
+
+model FeatureFlag {
+  id             String       @id @default(uuid())
+  key            String       @unique
+  name           String
+  description    String?
+  isEnabled      Boolean      @default(true) // Global default
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model OrganizationFeatureFlag {
+  organizationId String
+  featureKey     String
+  isEnabled      Boolean      @default(false)
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, featureKey])
+}
+
+// -----------------------------------------------------------------------------
+// SYSTEM LOGS & SETTINGS
+// -----------------------------------------------------------------------------
+
+model Activity {
+  id             String       @id @default(uuid())
+  organizationId String?
+  userId         String?
+  action         String
+  resourceType   String?
+  resourceId     String?
+  details        Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  organizationId String?
+  userId         String?
+  action         String
+  status         String       // success, failure
+  reason         String?
+  targetId       String?
+  targetType     String?
+  previousState  Json?
+  newState       Json?
+  ipAddress      String?
+  userAgent      String?
+  requestId      String?
+  source         String?      @default("api")
+  createdAt      DateTime     @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id             String       @id @default(uuid())
+  organizationId String?
+  userId         String
+  type           String       // e.g., 'system', 'mention', 'alert'
+  title          String
+  content        String
+  link           String?
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  id             String       @id @default(uuid())
+  userId         String
+  organizationId String?
+  channels       Json         // e.g., { email: true, inApp: true }
+  types          Json         // e.g., { system: true, alert: false }
+
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+}
+
+model OrganizationSetting {
+  organizationId String       @id
+  branding       Json?
+  localization   Json?        // timezone, currency, language, date format
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// INFRASTRUCTURE (STORAGE, JOBS)
+// -----------------------------------------------------------------------------
+
+model Folder {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  parentId       String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent         Folder?      @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children       Folder[]     @relation("FolderHierarchy")
+  files          File[]
+}
+
+model File {
+  id             String       @id @default(uuid())
+  organizationId String
+  folderId       String?
+  uploadedById   String
+  name           String
+  originalName   String
+  mimeType       String
+  size           Int
+  path           String       // Storage path/URI
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  folder         Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  uploadedBy     User         @relation(fields: [uploadedById], references: [id])
+}
+
+model ImportJob {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  moduleKey      String       // The module handling this import
+  entityType     String       // e.g., 'contact', 'invoice'
+  status         String       @default("pending") // pending, processing, completed, failed
+  fileId         String?
+  mappings       Json?
+  totalRows      Int          @default(0)
+  processedRows  Int          @default(0)
+  failedRows     Int          @default(0)
+  errors         Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id])
+}
+
+model ExportJob {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  moduleKey      String
+  entityType     String
+  status         String       @default("pending")
+  filters        Json?
+  fileId         String?      // Generated file
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id])
+}
+
+// -----------------------------------------------------------------------------
+// MODULE: CRM
+// -----------------------------------------------------------------------------
+
+model CrmCompany {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  website        String?
+  industry       String?
+  phone          String?
+  email          String?
+  address        String?
+  city           String?
+  state          String?
+  country        String?
+  postalCode     String?
+  description    String?
+  ownerId        String?
+  status         String       @default("active") // active, inactive
+  createdBy      String
+  updatedBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner          User?        @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contacts       CrmContact[]
+  deals          CrmDeal[]
+}
+
+model CrmContact {
+  id             String       @id @default(uuid())
+  organizationId String
+  firstName      String
+  lastName       String?
+  email          String?
+  phone          String?
+  jobTitle       String?
+  companyId      String?
+  ownerId        String?
+  description    String?
+  status         String       @default("active")
+  createdBy      String
+  updatedBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company        CrmCompany?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner          User?        @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  deals          CrmDeal[]
+}
+
+model CrmLead {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  firstName          String
+  lastName           String?
+  email              String?
+  phone              String?
+  companyName        String?
+  status             String       @default("new") // new, contacted, qualified, unqualified, converted
+  source             String?      // website, referral, etc.
+  ownerId            String?
+  notes              String?
+  convertedAt        DateTime?
+  convertedContactId String?
+  convertedCompanyId String?
+  convertedDealId    String?
+  createdBy          String
+  updatedBy          String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner              User?        @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+}
+
+model CrmPipeline {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  isDefault      Boolean      @default(false)
+  ownerId        String?
+  status         String       @default("active")
+  createdBy      String
+  updatedBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner          User?        @relation("PipelineOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  stages         CrmPipelineStage[]
+  deals          CrmDeal[]
+}
+
+model CrmPipelineStage {
+  id             String       @id @default(uuid())
+  organizationId String
+  pipelineId     String
+  name           String
+  order          Int
+  probability    Int          @default(0) // 0-100
+  isClosedWon    Boolean      @default(false)
+  isClosedLost   Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline       CrmPipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  deals          CrmDeal[]
+}
+
+model CrmDeal {
+  id             String       @id @default(uuid())
+  organizationId String
+  title          String
+  value          Float        @default(0)
+  currency       String       @default("USD")
+  status         String       @default("open") // open, won, lost
+  pipelineId     String
+  stageId        String
+  companyId      String?
+  contactId      String?
+  ownerId        String?
+  expectedCloseDate DateTime?
+  description    String?
+  createdBy      String
+  updatedBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline       CrmPipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage          CrmPipelineStage @relation(fields: [stageId], references: [id])
+  company        CrmCompany?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact        CrmContact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  owner          User?        @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+}
+
+
+// -----------------------------------------------------------------------------
+// MODULE: HRMS
+// -----------------------------------------------------------------------------
+
+model HrmsEmployeeProfile {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String       
+  departmentId   String?      // Links to Core Department
+  jobTitle       String
+  employmentType String       // full_time, part_time, contractor
+  startDate      DateTime
+  status         String       @default("active") // active, on_leave, terminated
+  
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  department     Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  attendances    HrmsAttendance[]
+  leaves         HrmsLeaveRequest[]
+  payrolls       HrmsPayrollStub[]
+  reviews        HrmsPerformanceReview[]
+
+  @@unique([organizationId, userId])
+}
+
+model HrmsAttendance {
+  id             String       @id @default(uuid())
+  organizationId String
+  employeeId     String
+  date           DateTime     @db.Date
+  clockIn        DateTime?
+  clockOut       DateTime?
+  status         String       @default("present") // present, absent, late, half_day
+  notes          String?
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee       HrmsEmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, employeeId, date])
+}
+
+model HrmsLeaveRequest {
+  id             String       @id @default(uuid())
+  organizationId String
+  employeeId     String
+  leaveType      String       // sick, vacation, personal
+  startDate      DateTime
+  endDate        DateTime
+  status         String       @default("pending") // pending, approved, rejected
+  reason         String?
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee       HrmsEmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+}
+
+model HrmsPayrollStub {
+  id             String       @id @default(uuid())
+  organizationId String
+  employeeId     String
+  periodStart    DateTime     @db.Date
+  periodEnd      DateTime     @db.Date
+  grossPay       Float
+  netPay         Float
+  deductions     Float
+  status         String       @default("draft") // draft, paid
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee       HrmsEmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+}
+
+model HrmsPerformanceReview {
+  id             String       @id @default(uuid())
+  organizationId String
+  employeeId     String
+  reviewerId     String       // Links to User (reviewer)
+  reviewPeriod   String       // e.g. Q3 2026
+  rating         Int          // 1-5 scale
+  comments       String?
+  status         String       @default("draft") // draft, published
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee       HrmsEmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  reviewer       User         @relation("ReviewerUser", fields: [reviewerId], references: [id], onDelete: Restrict)
+}
